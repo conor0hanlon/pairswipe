@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isPairMember(pairId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/pairs/$(pairId))
+        && (
+          get(/databases/$(database)/documents/pairs/$(pairId)).data.memberA == request.auth.uid
+          || get(/databases/$(database)/documents/pairs/$(pairId)).data.memberB == request.auth.uid
+        );
+    }
+
+    function isPairViewer(pairId) {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/pairs/$(pairId))
+          .data.get('viewerIds', []).hasAny([request.auth.uid]);
+    }
+
+    match /pairs/{pairId} {
+      // A second phone must read the target pair inside the join transaction
+      // before Firebase can safely attach it as memberB. Pair IDs are random,
+      // and collection listing remains restricted to existing members.
+      allow get: if isSignedIn();
+      allow list: if isSignedIn()
+        && (
+          resource.data.memberA == request.auth.uid
+          || resource.data.memberB == request.auth.uid
+        );
+
+      allow create: if isSignedIn()
+        && request.resource.data.memberA == request.auth.uid;
+
+      allow update: if isPairMember(pairId)
+        || (
+          isSignedIn()
+          && resource.data.memberB == null
+          && request.resource.data.memberB == request.auth.uid
+          && request.resource.data.memberA == resource.data.memberA
+          && request.resource.data.inviteCode == resource.data.inviteCode
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.queueTitleIds == resource.data.queueTitleIds
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["memberB"])
+        )
+        || (
+          // A television can register itself as a read-only viewer when it
+          // already knows the room's private invite code.
+          isSignedIn()
+          && request.resource.data.get('viewerIds', []).hasAll(resource.data.get('viewerIds', []))
+          && request.resource.data.get('viewerIds', []).hasAny([request.auth.uid])
+          && request.resource.data.get('viewerIds', []).size()
+            == resource.data.get('viewerIds', []).size() + 1
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["viewerIds"])
+        );
+
+      match /votes/{voteId} {
+        allow read, write: if isPairMember(pairId);
+      }
+
+      match /matches/{titleId} {
+        allow read: if isPairMember(pairId) || isPairViewer(pairId);
+        allow write: if isPairMember(pairId);
+      }
+
+      match /titles/{titleId} {
+        allow read: if isPairMember(pairId) || isPairViewer(pairId);
+        allow write: if isPairMember(pairId);
+      }
+    }
+
+    match /invites/{inviteCode} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isSignedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.code == inviteCode;
+      allow update, delete: if false;
+    }
+  }
+}

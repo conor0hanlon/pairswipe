@@ -1,0 +1,6 @@
+// Public defaults keep a fresh checkout buildable with the sample title feed.
+TMDB_API_KEY =
+OMDB_API_KEY =
+
+// This optional local file contains real keys and is intentionally ignored by Git.
+#include? "Secrets.xcconfig"
